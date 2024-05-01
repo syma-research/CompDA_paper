@@ -1,0 +1,52 @@
+---
+title: "Obtain X data"
+output: html_document
+---
+
+* This qmd downloads healthy stool microbiome samples from curatedMetagenomicData.
+  It then does basic filtering and preprocessing and saves the abundance table and 
+  metadata.
+
+```{r setup, include=FALSE}
+# rm(list = ls())
+# library(magrittr)
+```
+
+```{r subset and create X matrix}
+# dir_output <- "/n/janson_lab/lab/sma/CompDA_paper/data/simulation"
+# dir.create(dir_output, recursive = TRUE, showWarnings = FALSE)
+# 
+# data(sampleMetadata, package = "curatedMetagenomicData")
+# sample_stool <- sampleMetadata %>% 
+#   dplyr::filter(body_site == "stool",
+#                 non_westernized == "no",
+#                 disease %in% c("healthy")) %>% 
+#   dplyr::group_by(subject_id) %>% 
+#   dplyr::arrange(visit_number) %>% 
+#   dplyr::slice(1) %>% 
+#   dplyr::ungroup()
+# data_stool <- sample_stool %>%
+#   curatedMetagenomicData::returnSamples("relative_abundance")
+# save(data_stool, file = file.path(dir_output, "StoolSubset_curatedMetagenomicData.RData"))
+# load(file.path(dir_output, "StoolSubset_curatedMetagenomicData.RData"))
+
+# common samples
+# mat_species <- SummarizedExperiment::assays(data_stool)[[1]]
+# rownames(sample_stool) <- sample_stool$sample_id
+# set.seed(0)
+# samples_common <- intersect(rownames(sample_stool), colnames(mat_species)) %>% 
+#   {sample(., size = length(.), replace = FALSE)}
+# sample_stool <- sample_stool[samples_common, ]
+# mat_species <- mat_species[, samples_common]
+
+# subset species
+# mat_species <- (apply(mat_species > 0, 1, mean) > 0.02) %>% 
+#   {mat_species[., ]}
+# species_order <- apply(mat_species, 1, mean) %>% 
+#   order(decreasing = TRUE) %>% 
+#   {rownames(mat_species)[.][seq(1, 300)]}
+# mat_species <- mat_species[species_order, ]
+# 
+# save(mat_species, file = file.path(dir_output, "/mat_species.RData"))
+# save(sample_stool, file = file.path(dir_output, "/sample_stool.RData"))
+```

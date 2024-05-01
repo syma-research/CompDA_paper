@@ -3,3 +3,5 @@
 .RData
 .Ruserdata
 /CompDA_paper.Rproj
+results/
+r_batchtools_reg/

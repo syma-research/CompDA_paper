@@ -1,0 +1,239 @@
+---
+title: "Analyze real-world CRC microbiomes"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+rm(list = ls())
+library(magrittr)
+library(ggplot2)
+```
+
+```{r load data}
+dir_output <- "/n/janson_lab/lab/sma/CompDA_paper/results/application"
+dir.create(dir_output)
+data("sampleMetadata", package = "curatedMetagenomicData")
+sampleMetadata <- sampleMetadata %>%
+  dplyr::filter(study_name %in% 
+                  c("ZellerG_2014",
+                    "YuJ_2015",
+                    "FengQ_2015",
+                    "VogtmannE_2016",
+                    "HanniganGD_2017",
+                    "ThomasAM_2018a",
+                    "ThomasAM_2018b")) %>% 
+  dplyr::filter(study_condition %in% c("CRC", "control"))
+
+mat_abd <- sampleMetadata %>%
+  curatedMetagenomicData::returnSamples(
+    "relative_abundance")
+mat_abd <- SummarizedExperiment::assay(mat_abd)
+mat_abd <- mat_abd[apply(mat_abd > 0, 1, mean) > 0.05, ]
+mat_abd <- apply(mat_abd, 2, function(x) x / sum(x))
+mat_abd <- t(mat_abd)
+y <- (sampleMetadata$disease == "CRC") * 1
+z <- model.matrix(~study_name, data = sampleMetadata)[, -1]
+half_min <- min(setdiff(mat_abd, 0)) / 2
+```
+
+```{r run different tests}
+fit_CompDA <-
+  CompDA::CompDA(
+    x = mat_abd, y = y, covariates = z, family_y = "binomial",
+    epsilon = half_min, cv_folds = 5, m = 1e4, verbose = TRUE,
+    debug_dir = paste0(dir_output, "/CompDA"))
+q <- p.adjust(fit_CompDA[, 2], "BH")
+tb_result <- data.frame(feature = colnames(mat_abd),
+                        beta = fit_CompDA[, 1],
+                        p = fit_CompDA[, 2],
+                        q = q)
+readr::write_csv(tb_result, file = paste0(dir_output, "/tb_result_CompDA.csv"))
+
+# run masslin
+mat_maaslin <- mat_abd
+# set temp feature names because Maaslin2 modifies feature names
+colnames(mat_maaslin) <- paste0("Feature", seq(1, ncol(mat_maaslin)))
+tb_name_match <- tibble::tibble(
+  feature_maaslin = colnames(mat_maaslin),
+  feature_original = colnames(mat_abd)
+)
+df_meta <- data.frame(y = y, study = as.factor(sampleMetadata$study_name))
+rownames(df_meta) <- rownames(mat_abd)
+fit_masslin2 <- Maaslin2::Maaslin2(mat_maaslin, 
+                                   input_metadata = df_meta,
+                                   output = paste0(dir_output, "/Maaslin2/"), 
+                                   normalization = "TSS", transform = "LOG", 
+                                   max_significance = 1, 
+                                   fixed_effects = c("y", "study"), 
+                                   random_effects = "study",
+                                   reference = 
+                                     paste0("study,",
+                                            as.character(unique(df_meta$study)[1])),
+                                   plot_heatmap = FALSE, plot_scatter = FALSE)
+tb_maaslin2 <- fit_masslin2$results %>% 
+  dplyr::filter(metadata == "y") %>% 
+  dplyr::left_join(tb_name_match, by = c("feature" = "feature_maaslin")) %>% 
+  dplyr::mutate(feature = feature_original)
+
+# Histogram of conditional associations
+tb_hist <- tb_result %>% 
+  dplyr::left_join(tb_maaslin2, by = "feature") %>% 
+  dplyr::mutate(feature_class = dplyr::case_when(
+    q < 0.05 ~ "CompDA",
+    qval < 0.05 ~ "DA Only",
+    TRUE ~ "Negatives"
+  ) %>% factor(
+    levels = c("CompDA", "DA Only", "Negatives")
+  ))
+colors <- palette.colors(n = 4, palette = "R4")[-1]
+colors_hist <- c("CompDA" = colors[1],
+                 "DA Only" = colors[2], 
+                 "Negatives" = "black")
+p_hist <- tb_hist %>% 
+  ggplot(aes(x = abs(beta), fill = feature_class)) +
+  geom_histogram(position = position_dodge(width = 1e-2), alpha = 0.7,
+                 binwidth = 2e-2) +
+  scale_fill_manual(values = colors_hist) +
+  # scale_x_continuous(limits = c(-0.006, 0.13)) +
+  theme_bw() +
+  xlab("Conditional correlation:\nmicrobe vs. outcome") +
+  ylab("\nNumber of features") +
+  theme(legend.position = c(1, 1),
+        legend.justification = c(1, 1),
+        legend.background = element_blank(),
+        legend.title = element_blank())
+ggsave(p_hist, 
+       filename = "../meeting_notes/11_02_22_meeting/hist.jpeg",
+       width = 5, height = 4)
+
+# effect sizes
+tb_effect <- tb_result %>% 
+  dplyr::left_join(tb_maaslin2, by = "feature") %>% 
+  dplyr::filter(q < 0.05) %>% 
+  dplyr::mutate(feature_class = ifelse(
+    qval < 0.05,
+    "Both",
+    "CompDA"
+  )) %>% 
+  dplyr::mutate(feature_plot = 
+                  feature %>% 
+                  stringr::str_replace("^.*s\\_\\_", "") %>% 
+                  stringr::str_replace("\\_", " ")) %>% 
+  dplyr::arrange(beta) %>% 
+  dplyr::mutate(feature_plot = forcats::as_factor(feature_plot)) %>% 
+  dplyr::arrange(feature_plot)
+p_effect <- tb_effect %>% 
+  ggplot(aes(x = beta, y = feature_plot)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(x = 0, y = feature_plot, 
+                label = paste0("q = ", round(q, digits = 4)),
+                hjust = c(-0.1, 1.1)[(beta > 0) + 1])) +
+  theme_bw() +
+  theme(axis.text.y = element_text(face = "italic", colour = color_text),
+        axis.title.y = element_blank()) +
+  xlab("Effect size\n(conditional correlation)") +
+  scale_y_discrete(position = "right") +
+  theme(plot.margin = margin(5.5,5.5,5.5,30, "pt"))
+
+# test for prediction performance of the different sets of features
+source("R/nested_CV.R")
+mat_abd_transformed <- log(t(mat_abd) + half_min)
+which_features <-
+  c(which(stringr::str_detect(colnames(mat_abd), "Dialister\\_pneumosintes")),
+    which(stringr::str_detect(colnames(mat_abd), "Fusobacterium\\_nucleatum")),
+    which(stringr::str_detect(colnames(mat_abd), "Peptostreptococcus\\_stomatis")),
+    which(stringr::str_detect(colnames(mat_abd), "Streptococcus\\_salivarius"))
+    )
+df_fit <- tibble::tibble(
+  mat_covariate = 
+    list(z,
+       # single-microbe model
+       cbind(z, mat_abd_transformed[which_features[1], ]),
+       cbind(z, mat_abd_transformed[which_features[2], ]),
+       cbind(z, mat_abd_transformed[which_features[3], ]),
+       cbind(z, mat_abd_transformed[which_features[4], ]),
+       # multi-microbe model
+       cbind(z, t(mat_abd_transformed[which_features[c(1, 2, 3, 4)], ])),
+       # multi-microbe model, single microbe removed
+       cbind(z, t(mat_abd_transformed[which_features[c(2, 3, 4)], ])),
+       cbind(z, t(mat_abd_transformed[which_features[c(1, 3, 4)], ])),
+       cbind(z, t(mat_abd_transformed[which_features[c(1, 2, 4)], ])),
+       cbind(z, t(mat_abd_transformed[which_features[c(1, 2, 3)], ]))
+       ),
+  x_axis = c(
+    "Study alone",
+    "Study + <span style = 'color:#61D04F;'>*D. pneumosintes*</span>",
+    "Study + <span style = 'color:#DF536B;'>*F. nucleatum*</span>",
+    "Study + <span style = 'color:#DF536B;'>*P. stomatis*</span>",
+    "Study + <span style = 'color:#DF536B;'>*S. salivarius*</span>",
+    "Study + all microbes",
+    "Study + microbes,<br>no <span style = 'color:#61D04F;'>*D. pneumosintes*</span>",
+    "Study + microbes,<br>no <span style = 'color:#DF536B;'>*F. nucleatum*</span>",
+    "Study + microbes,<br>no <span style = 'color:#DF536B;'>*P. stomatis*</span>",
+    "Study + microbes,<br>no <span style = 'color:#DF536B;'>*S. salivarius*</span>"
+  ) %>% forcats::as_factor(),
+  panel = c(
+    "Baseline",
+    rep("Single microbe\npredictor", 4),
+    "Four microbe\npredictors",
+    rep("Three microbe\npredictors", 4)
+  ) %>% forcats::as_factor()
+)
+    
+set.seed(0)
+df_auc <- 
+  df_fit %>% 
+  dplyr::group_split(seq(1, dplyr::n())) %>% 
+  purrr::map_dfr(function(i_tb) {
+    ypred <- nested_cv_pred(x = i_tb$mat_covariate[[1]], y = y, K = 10)
+    roc <- pROC::roc(
+      response = factor(y, levels = c(0, 1)),
+      predictor = ypred)
+    auc <- pROC::auc(roc)
+    se_auc <- sqrt(pROC::var(roc))
+    
+    return(
+      tibble::tibble(
+        auc = as.numeric(auc),
+        se_auc = se_auc,
+        x_axis = i_tb$x_axis,
+        panel = i_tb$panel)
+    )
+  })
+
+df_annotation <- tibble::tibble(
+  label = "<span style = 'color:#DF536B;'>Microbe selected by CompDA</span><br><span style = 'color:#61D04F;'>Microbe selected by DA only</span>",
+  x = Inf, y = -Inf,
+  panel = factor("Three microbe\npredictors", levels = levels(df_auc$panel))
+)
+
+p_auc <- df_auc %>% 
+  ggplot(aes(x = x_axis, y = auc)) +
+  geom_point(size = 2) +
+  geom_errorbar(aes(ymin = auc - se_auc, ymax = auc + se_auc),
+                width = 0.25) +
+  ggtext::geom_richtext(data = df_annotation,
+                        mapping = aes(x = x, y = y, label = label),
+                        hjust = 1.05,
+                        vjust = -0.05,
+                        fill = NA, label.color = NA,
+                        label.padding = grid::unit(rep(0, 4), "pt")) +
+  theme_bw() +
+  facet_grid(.~panel, scales = "free_x", space = "free_x") +
+  theme(axis.text.x = ggtext::element_markdown(
+    angle = 45, vjust = 1,
+    hjust = 1, size = 11),
+    axis.title.x = element_blank()) +
+  ylab("Prediction AUC")
+
+p_fig4 <- cowplot::plot_grid(
+  cowplot::plot_grid(p_effect, p_hist, nrow = 1,
+                     rel_widths = c(1, 0.7),
+                     labels = c("A", "B")), 
+  p_auc, 
+  ncol = 1, labels = c("", "C"),
+  rel_heights = c(0.8, 1)
+)
+ggsave(p_fig4, filename = "/n/janson_lab/lab/sma/CompDA_paper/results/figures/figure4.pdf",
+       width = 9, height = 7)
+```
