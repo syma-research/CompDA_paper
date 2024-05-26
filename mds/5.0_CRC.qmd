@@ -107,6 +107,7 @@ ggsave(p_hist,
        width = 5, height = 4)
 
 # effect sizes
+color_text <- c()
 tb_effect <- tb_result %>% 
   dplyr::left_join(tb_maaslin2, by = "feature") %>% 
   dplyr::filter(q < 0.05) %>% 
