@@ -12,7 +12,7 @@ library(ggplot2)
 ```{r summarize findings}
 dir_output <- "/n/janson_lab/lab/sma/CompDA_paper/results/simulation/binary_Y"
 load(paste0(dir_output, "/tb_job.RData"))
-tb_results <- seq(1, nrow(tb_job)) %>%
+tb_results <- tb_job$i_job %>%
   purrr::map_dfr(function(i_job) {
     load(paste0(dir_output, "/data/y_sim_", i_job, ".RData"))
     load(paste0(dir_output, "/fit/CompDA_", i_job, ".RData"))
@@ -42,40 +42,34 @@ tb_results <- seq(1, nrow(tb_job)) %>%
 tb_results <- tb_results %>%
   dplyr::left_join(tb_job, by = "i_job")
 save(tb_results, file = paste0(dir_output, "/tb_results.RData"))
-# load("/net/rcstorenfs02/ifs/rc_labs/janson_lab/lab/sma/CRT_microbiome/results/simulation/real_X/binary_Y/tb_results.RData")
 
-# jobs_done <- list.files(paste0(dir_output, "/fit/"), pattern = "results") %>% 
-#   stringr::str_replace("\\.csv", "") %>% 
-#   stringr::str_replace("results\\_", "") %>% 
-#   as.numeric()
-# tb_results_matlab <- jobs_done %>% 
-#   purrr::map_dfr(function(i_job) {
-#     load(paste0(dir_output, "/fit/y_sim_", i_job, ".RData"))
-#     res_matlab <- readr::read_csv(paste0(dir_output, "/fit/results_", i_job, ".csv"),
-#                                   col_names = FALSE, col_types = "ddd")
-#     
-#     sd_err <- (res_matlab[[3]] - res_matlab[[2]]) / qnorm(0.975) / 2
-#     p <- ifelse(sd_err == 0, 
-#                 1, 
-#                 2 * (1 - pnorm(abs(res_matlab[[1]]) / sd_err)))
-#     
-#     q <- p.adjust(p, method = "BH")
-#     pos <- q < 0.05
-#     tibble::tibble(
-#       power = mean(pos[y_sim$ind_TP]),
-#       fdr = {
-#         if(!any(pos))
-#           0
-#         else
-#           sum((!y_sim$ind_TP) & pos) / sum(pos)
-#       },
-#       method = "db_lasso",
-#       i_job = i_job)
-#   })
-# tb_results_matlab <- tb_results_matlab %>% 
-#   dplyr::left_join(tb_job, by = "i_job")
-# save(tb_results_matlab, file = paste0(dir_output, "/tb_results_matlab.RData"))
-load("/net/rcstorenfs02/ifs/rc_labs/janson_lab/lab/sma/CRT_microbiome/results/simulation/real_X/binary_Y/tb_results_matlab.RData")
+tb_results_matlab <- tb_job$i_job %>%
+  purrr::map_dfr(function(i_job) {
+    load(paste0(dir_output, "/data/y_sim_", i_job, ".RData"))
+    res_matlab <- readr::read_csv(paste0(dir_output, "/fit/matlab_", i_job, ".csv"),
+                                  col_names = FALSE, col_types = "ddd")
+
+    sd_err <- (res_matlab[[3]] - res_matlab[[2]]) / qnorm(0.975) / 2
+    p <- ifelse(sd_err == 0,
+                1,
+                2 * (1 - pnorm(abs(res_matlab[[1]]) / sd_err)))
+
+    q <- p.adjust(p, method = "BH")
+    pos <- q < 0.05
+    tibble::tibble(
+      power = mean(pos[y_sim$ind_TP]),
+      fdr = {
+        if(!any(pos))
+          0
+        else
+          sum((!y_sim$ind_TP) & pos) / sum(pos)
+      },
+      method = "db_lasso",
+      i_job = i_job)
+  })
+tb_results_matlab <- tb_results_matlab %>%
+  dplyr::left_join(tb_job, by = "i_job")
+save(tb_results_matlab, file = paste0(dir_output, "/tb_results_matlab.RData"))
 
 tb_results_summary <- 
   rbind(tb_results,
@@ -92,7 +86,6 @@ tb_results_summary <-
 
 tb_results_summary <- 
   tb_results_summary %>% 
-  dplyr::filter(method != "CompDA_marginal") %>% 
   dplyr::mutate(method = method %>% 
                   dplyr::recode(
                          "db_lasso" = "lasso (with inference)",
@@ -265,57 +258,12 @@ p_suppFig1 <- cowplot::plot_grid(
   p_sampleSize_fdr, p_sampleSize_power,
   p_dimension_fdr, p_dimension_power,
   p_sigDensity_fdr, p_sigDensity_power,
-  labels = c("A)", "", "B)", "",
-             "C)", ""),
+  labels = c("A", "", "B", "",
+             "C", ""),
   ncol = 2
 )
 ggsave(p_suppFig1, 
        filename = 
          "/n/janson_lab/lab/sma/CompDA_paper/results/suppFigures/suppFig1.pdf",
        width = 7, height = 9)
-
-tb_time <- seq(1, nrow(tb_job)) %>%
-  purrr::map_dfr(function(i_job) {
-    load(paste0(dir_output, "/fit/time_CompDA_", i_job, ".RData"))
-    tibble::tibble(
-      time = time_CompDA[3],
-      i_job = i_job)
-  })
-tb_time <- tb_time %>% 
-  dplyr::left_join(tb_job, by = "i_job")
-p_sampleSize_time <- tb_time %>% 
-  dplyr::filter(
-    n_features == 200,
-    signal_density == 0.1,
-    effect_size == 0.4) %>% 
-  dplyr::arrange(n_samples) %>% 
-  dplyr::mutate(n_samples = forcats::as_factor(n_samples)) %>% 
-  ggplot(aes(x = n_samples, y = time / 60)) +
-  geom_boxplot() +
-  theme_bw() +
-  xlab("Sample size") +
-  ylab("Time (minutes)")
-
-p_dimension_time <- tb_time %>% 
-  dplyr::filter(
-    n_samples == 400,
-    signal_density == 0.1,
-    effect_size == 0.4) %>% 
-  dplyr::arrange(n_features) %>% 
-  dplyr::mutate(n_features = forcats::as_factor(n_features)) %>% 
-  ggplot(aes(x = n_features, y = time / 60)) +
-  geom_boxplot() +
-  theme_bw() +
-  xlab("Dimension of the microbiome") +
-  ylab("Time (minutes)")
-
-p_time <- cowplot::plot_grid(
-  p_sampleSize_time, p_dimension_time,
-  labels = c("A)", "B)"),
-  nrow = 1,
-  label_size = 10
-)
-ggsave(p_time, 
-       filename = "/n/janson_lab/lab/sma/CRT_microbiome/results/suppFigures/suppFig2.pdf",
-       width = 6.5, height = 3)
 ```

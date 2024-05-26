@@ -1,0 +1,316 @@
+---
+title: "Linear Y performance comparison"
+format: html
+---
+
+```{r setup, include=FALSE}
+rm(list = ls())
+library(magrittr)
+library(ggplot2)
+```
+
+```{r summarize results}
+dir_output <- "/n/janson_lab/lab/sma/CompDA_paper/results/simulation/linear_Y"
+
+load(paste0(dir_output, "/tb_job.RData"))
+tb_results <- 
+  tb_job$i_job %>% 
+  purrr::map_dfr(function(i_job) {
+    load(paste0(dir_output, "/data/y_sim_", i_job, ".RData"))
+    load(paste0(dir_output, "/fit/CompDA_", i_job, ".RData"))
+    load(paste0(dir_output, "/fit/linda_", i_job, ".RData"))
+    load(paste0(dir_output, "/fit/DA_", i_job, ".RData"))
+    load(paste0(dir_output, "/fit/lasso_", i_job, ".RData"))
+    
+    list(fit_lasso, fit_DA, fit_linda, fit_CompDA[, 2]) %>% 
+      purrr::map2_dfr(
+        c("lasso", "DA", "LinDA", "CompDA"), 
+        function(i_fit, i_method) {
+          i_fit[is.na(i_fit)] <- 1
+          q <- p.adjust(i_fit, method = "BH")
+          pos <- q < 0.05
+          tibble::tibble(
+            power = mean(pos[y_sim$ind_TP]),
+            fdr = {
+              if(!any(pos))
+                0
+              else
+                sum((!y_sim$ind_TP) & pos) / sum(pos)
+            },
+            method = i_method)
+        }) %>% 
+      dplyr::mutate(i_job = i_job)
+  })
+tb_results <- tb_results %>% 
+  dplyr::left_join(tb_job, by = "i_job")
+save(tb_results, file = paste0(dir_output, "/tb_results.RData"))
+
+tb_results_summary <- 
+  tb_results %>% 
+  dplyr::group_by(method, n_samples, n_features, signal_density, effect_size, r_x) %>% 
+  dplyr::summarise(power_mean_y = mean(power),
+                   fdr_mean_y = mean(fdr)) %>% 
+  dplyr::group_by(method, n_samples, n_features, signal_density, effect_size) %>% 
+  dplyr::summarise(power_mean = mean(power_mean_y),
+                   power_sd = sd(power_mean_y) / sqrt(dplyr::n()),
+                   fdr_mean = mean(fdr_mean_y),
+                   fdr_sd = sd(fdr_mean_y) / sqrt(dplyr::n()))
+
+tb_results_summary <- 
+  tb_results_summary %>% 
+  dplyr::mutate(method = method %>% 
+                  dplyr::recode(
+                    "lasso" = "lasso (no inference)")) %>% 
+  dplyr::mutate(method = factor(method, levels = c("DA", "LinDA", 
+                                                   "lasso (no inference)", 
+                                                   "CompDA")))
+
+colors <- c("black", rev(palette.colors(n = 5, "R4")[-c(1, 3)]))
+names(colors) <- c(levels(tb_results_summary$method))
+
+p_sampleSize_power <- tb_results_summary %>% 
+  dplyr::filter(n_features == 200,
+                signal_density == 0.1,
+                effect_size == 0.15) %>% 
+  ggplot(aes(x = n_samples, y = power_mean, color = method)) +
+  geom_point() +
+  geom_errorbar(aes(ymax = power_mean + power_sd,
+                    ymin = power_mean - power_sd)) +
+  geom_line() +
+  theme_bw() +
+  scale_color_manual(values = colors) +
+  theme(legend.position = c(0, 1),
+        legend.background = element_blank(),
+        legend.title = element_blank(),
+        legend.justification = c(0, 1)) +
+  ggtitle("") +
+  xlab("Sample size") +
+  ylab("Power")
+
+p_sampleSize_fdr <- tb_results_summary %>% 
+  dplyr::filter(n_features == 200,
+                signal_density == 0.1,
+                effect_size == 0.15) %>% 
+  ggplot(aes(x = n_samples, y = fdr_mean, color = method)) +
+  geom_point() +
+  geom_errorbar(aes(ymax = fdr_mean + fdr_sd,
+                    ymin = fdr_mean - fdr_sd)) +
+  geom_line() +
+  geom_hline(yintercept = 0.05, linetype = "dashed") +
+  theme_bw() +
+  theme(legend.position = "none") +
+  scale_color_manual(values = colors) +
+  ggtitle("Sample size evaluation") +
+  xlab("Sample size") +
+  ylab("FDR")
+
+p_effect_power <- tb_results_summary %>% 
+  dplyr::filter(n_samples == 400,
+                n_features == 200,
+                signal_density == 0.1) %>% 
+  ggplot(aes(x = effect_size, y = power_mean, color = method)) +
+  geom_point() +
+  geom_errorbar(aes(ymax = power_mean + power_sd,
+                    ymin = power_mean - power_sd)) +
+  geom_line() +
+  theme_bw() +
+  scale_color_manual(values = colors) +
+  theme(legend.position = "none") +
+  ggtitle("") +
+  xlab("Microbial effect size on health") +
+  ylab("Power")
+
+p_effect_fdr <- tb_results_summary %>% 
+  dplyr::filter(method != "screening + fixed-X knockoff") %>% 
+  dplyr::filter(n_samples == 400,
+                n_features == 200,
+                signal_density == 0.1) %>% 
+  ggplot(aes(x = effect_size, y = fdr_mean, color = method)) +
+  geom_point() +
+  geom_errorbar(aes(ymax = fdr_mean + fdr_sd,
+                    ymin = fdr_mean - fdr_sd)) +
+  geom_line() +
+  geom_hline(yintercept = 0.05, linetype = "dashed") +
+  theme_bw() +
+  theme(legend.position = "none") +
+  scale_color_manual(values = colors) +
+  ggtitle("Effect size evaluation") +
+  xlab("Microbial effect size on health") +
+  ylab("FDR")
+
+p_dimension_power <- tb_results_summary %>% 
+  dplyr::filter(n_samples == 400,
+                signal_density == 0.1,
+                effect_size == 0.15) %>% 
+  ggplot(aes(x = n_features, y = power_mean, color = method)) +
+  geom_point() +
+  geom_errorbar(aes(ymax = power_mean + power_sd,
+                    ymin = power_mean - power_sd)) +
+  geom_line() +
+  theme_bw() +
+  scale_color_manual(values = colors) +
+  theme(legend.position = "none") +
+  ggtitle("") +
+  xlab("Number of total microbial features") +
+  ylab("Power")
+
+p_dimension_fdr <- tb_results_summary %>% 
+  dplyr::filter(method != "screening + fixed-X knockoff") %>% 
+  dplyr::filter(n_samples == 400,
+                signal_density == 0.1,
+                effect_size == 0.15) %>% 
+  ggplot(aes(x = n_features, y = fdr_mean, color = method)) +
+  geom_point() +
+  geom_errorbar(aes(ymax = fdr_mean + fdr_sd,
+                    ymin = fdr_mean - fdr_sd)) +
+  geom_line() +
+  geom_hline(yintercept = 0.05, linetype = "dashed") +
+  theme_bw() +
+  theme(legend.position = "none") +
+  scale_color_manual(values = colors) +
+  ggtitle("Microbiome dimension evaluation") +
+  xlab("Number of total microbial features") +
+  ylab("FDR")
+
+p_sigDensity_power <- tb_results_summary %>% 
+  dplyr::filter(n_samples == 400,
+                n_features == 200,
+                effect_size == 0.15) %>% 
+  ggplot(aes(x = signal_density, y = power_mean, color = method)) +
+  geom_point() +
+  geom_errorbar(aes(ymax = power_mean + power_sd,
+                    ymin = power_mean - power_sd)) +
+  geom_line() +
+  theme_bw() +
+  scale_color_manual(values = colors) +
+  theme(legend.position = "none") +
+  ggtitle("") +
+  xlab("") +
+  ylab("Power")
+
+p_sigDensity_fdr <- tb_results_summary %>% 
+  dplyr::filter(n_samples == 400,
+                n_features == 200,
+                effect_size == 0.15) %>% 
+  ggplot(aes(x = signal_density, y = fdr_mean, color = method)) +
+  geom_point() +
+  geom_errorbar(aes(ymax = fdr_mean + fdr_sd,
+                    ymin = fdr_mean - fdr_sd)) +
+  geom_line() +
+  geom_hline(yintercept = 0.05, linetype = "dashed") +
+  theme_bw() +
+  theme(legend.position = "none") +
+  scale_color_manual(values = colors) +
+  ggtitle("Signal density evaluation") +
+  xlab("Fraction of true health-related microbes") +
+  ylab("FDR")
+
+p_suppFig2 <- cowplot::plot_grid(
+  p_sampleSize_fdr, p_sampleSize_power,
+  p_effect_fdr, p_effect_power,
+  p_dimension_fdr, p_dimension_power,
+  p_sigDensity_fdr, p_sigDensity_power,
+  labels = c("A", "", "B", "",
+             "C", "", "D", ""),
+  ncol = 2
+)
+
+ggsave(p_suppFig2, 
+       filename = 
+         "/n/janson_lab/lab/sma/CompDA_paper/results/suppFigures/suppFig2.pdf",
+       width = 7, height = 12)
+```
+
+```{r computation time}
+load("/n/janson_lab/lab/sma/CompDA_paper/results/simulation/binary_Y/tb_job.RData")
+tb_time_binary <- seq(1, nrow(tb_job)) %>%
+  purrr::map_dfr(function(i_job) {
+    load(paste0("/n/janson_lab/lab/sma/CompDA_paper/results/simulation/binary_Y/fit/time_CompDA_", 
+                i_job, 
+                ".RData"))
+    tibble::tibble(
+      time = time_CompDA[3],
+      i_job = i_job)
+  })
+tb_time_binary <- tb_time_binary %>% 
+  dplyr::left_join(tb_job, by = "i_job")
+
+load("/n/janson_lab/lab/sma/CompDA_paper/results/simulation/linear_Y/tb_job.RData")
+tb_time_linear <- seq(1, nrow(tb_job)) %>%
+  purrr::map_dfr(function(i_job) {
+    load(paste0("/n/janson_lab/lab/sma/CompDA_paper/results/simulation/linear_Y/fit/time_CompDA_", 
+                i_job, 
+                ".RData"))
+    tibble::tibble(
+      time = time_CompDA[3],
+      i_job = i_job)
+  })
+tb_time_linear <- tb_time_linear %>% 
+  dplyr::left_join(tb_job, by = "i_job")
+
+p_sampleSize_binary <- tb_time_binary %>% 
+  dplyr::filter(
+    n_features == 200,
+    signal_density == 0.1,
+    effect_size == 0.4) %>% 
+  dplyr::arrange(n_samples) %>% 
+  dplyr::mutate(n_samples = forcats::as_factor(n_samples)) %>% 
+  ggplot(aes(x = n_samples, y = time / 60)) +
+  geom_boxplot() +
+  theme_bw() +
+  xlab("Sample size") +
+  ylab("Time (minutes)") +
+  ggtitle("Binary Y")
+
+p_dimension_binary <- tb_time_binary %>% 
+  dplyr::filter(
+    n_samples == 400,
+    signal_density == 0.1,
+    effect_size == 0.4) %>% 
+  dplyr::arrange(n_features) %>% 
+  dplyr::mutate(n_features = forcats::as_factor(n_features)) %>% 
+  ggplot(aes(x = n_features, y = time / 60)) +
+  geom_boxplot() +
+  theme_bw() +
+  xlab("Dimension of the microbiome") +
+  ylab("Time (minutes)") +
+  ggtitle("")
+
+p_sampleSize_linear <- tb_time_linear %>% 
+  dplyr::filter(
+    n_features == 200,
+    signal_density == 0.1,
+    effect_size == 0.15) %>% 
+  dplyr::arrange(n_samples) %>% 
+  dplyr::mutate(n_samples = forcats::as_factor(n_samples)) %>% 
+  ggplot(aes(x = n_samples, y = time / 60)) +
+  geom_boxplot() +
+  theme_bw() +
+  xlab("Sample size") +
+  ylab("Time (minutes)") +
+  ggtitle("Linear Y")
+
+p_dimension_linear <- tb_time_linear %>% 
+  dplyr::filter(
+    n_samples == 400,
+    signal_density == 0.1,
+    effect_size == 0.15) %>% 
+  dplyr::arrange(n_features) %>% 
+  dplyr::mutate(n_features = forcats::as_factor(n_features)) %>% 
+  ggplot(aes(x = n_features, y = time / 60)) +
+  geom_boxplot() +
+  theme_bw() +
+  xlab("Dimension of the microbiome") +
+  ylab("Time (minutes)") +
+  ggtitle("")
+
+p_time <- cowplot::plot_grid(
+  p_sampleSize_binary, p_dimension_binary,
+  p_sampleSize_linear, p_dimension_linear,
+  labels = c("A", "", "B", ""),
+  nrow = 2
+)
+ggsave(p_time, 
+       filename = "/n/janson_lab/lab/sma/CompDA_paper/results/suppFigures/suppFig3.pdf",
+       width = 6, height = 6)
+```

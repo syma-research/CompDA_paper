@@ -1,0 +1,460 @@
+---
+title: "When there are confounding covariates"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+rm(list = ls())
+library(magrittr)
+library(ggplot2)
+```
+
+```{r batch job}
+# batchtools::makeRegistry(
+#   file.dir = "/n/janson_lab/lab/sma/CompDA_paper/r_batchtools_reg/confounded/",
+#   package = c("magrittr"))
+batchtools::loadRegistry(
+  file.dir = "/n/janson_lab/lab/sma/CompDA_paper/r_batchtools_reg/confounded/",
+  writeable = TRUE)
+rm(list = ls())
+```
+
+```{r define job}
+dir_output <- "/n/janson_lab/lab/sma/CompDA_paper/results/simulation/confounded"
+dir.create(dir_output, recursive = TRUE, showWarnings = FALSE)
+dir.create(paste0(dir_output, "/fit"), recursive = TRUE, showWarnings = FALSE)
+dir.create(paste0(dir_output, "/debug"), recursive = TRUE, showWarnings = FALSE)
+dir.create(paste0(dir_output, "/data"), recursive = TRUE, showWarnings = FALSE)
+
+# prepare confounding covariate in data
+load("/n/janson_lab/lab/sma/CompDA_paper/data/simulation/mat_species.RData")
+load("/n/janson_lab/lab/sma/CompDA_paper/data/simulation/sample_stool.RData")
+sample_stool <- sample_stool %>% 
+  dplyr::filter(!is.na(age)) %>% 
+  dplyr::mutate(age_inf = (age < 2) * 1)
+mat_species <- mat_species[, sample_stool$sample_id]
+mat_species <- mat_species[apply(mat_species > 0, 1, any), ]
+save(sample_stool, file = paste0(dir_output, "/sample_stool.RData"))
+save(mat_species, file = paste0(dir_output, "/mat_species.RData"))
+
+tb_effetSize <- 
+  tibble::tibble(
+    n_samples = 400,
+    n_features = 200,
+    signal_density = 0.1,
+    effect_size = 0.15,
+    effect_confounded = c(0, 0.5, 1, 2, 4)
+  )
+
+tb_job <- 
+  tb_effetSize %>% 
+  tidyr::crossing(r_y = seq(1, 10),
+                  r_x = seq(1, 15)) %>% 
+  dplyr::mutate(i_job = seq(1, dplyr::n()))
+set.seed(0)
+tb_job <- tb_job %>% 
+  dplyr::mutate(
+    seed = ceiling(runif(n = nrow(tb_job), 0, 1) * 1e7)
+  )
+save(tb_job, 
+     file = paste0(dir_output, "/tb_job.RData"))
+
+one_job <- function(i_job) {
+  # x and confounder data
+  load(paste0(dir_output, "/mat_species.RData"))
+  load(paste0(dir_output, "/sample_stool.RData"))
+  source("/n/janson_lab/lab/sma/CompDA_paper/R/other_methods.R")
+  source("/n/janson_lab/lab/sma/CompDA_paper/R/simulate_y.R")
+  source("/n/janson_lab/lab/sma/CompDA_paper/R/helpers.R")
+  
+  load(paste0(dir_output, "/tb_job.RData"))
+  for(ii_job in seq((i_job - 1) * n_job_each + 1, i_job * n_job_each)) {
+    i_tb_job <- tb_job[ii_job, ]
+    set.seed(i_tb_job$seed)
+    
+    i_x_obs <- mat_species[sample.int(nrow(mat_species), 
+                                      size = i_tb_job$n_features),
+                           seq(i_tb_job$n_samples * (i_tb_job$r_x - 1) + 1, 
+                               i_tb_job$n_samples * i_tb_job$r_x)] %>% 
+      apply(2, tss_withzero) %>% 
+      t() 
+    i_z <- sample_stool[seq(i_tb_job$n_samples * (i_tb_job$r_x - 1) + 1, 
+                            i_tb_job$n_samples * i_tb_job$r_x), 
+                        c("age_inf"), 
+                        drop = FALSE] %>% 
+      as.matrix()
+    
+    half_min <- min(setdiff(i_x_obs, 0)) / 2
+    y_sim <- simulate_y_confounded(
+      x = i_x_obs, 
+      z = i_z,
+      effect_size = i_tb_job$effect_size, 
+      effect_confounded = i_tb_job$effect_confounded,
+      n_signal = i_tb_job$n_features * i_tb_job$signal_density, 
+      epsilon = half_min,
+      family = "gaussian",
+      seed = ii_job)
+    save(y_sim, file = paste0(dir_output, "/data/y_sim_", ii_job, ".RData"))
+    
+    # CompDA
+    fit_CompDA <- 
+      CompDA::CompDA(
+        x = i_x_obs, y = y_sim$y, covariates = i_z,
+        epsilon = half_min, 
+        family_y = "gaussian", m = 1e4, 
+        debug_dir = NULL)
+    
+    fit_CompDA_confounded <- 
+      CompDA::CompDA(
+        x = i_x_obs, y = y_sim$y,
+        epsilon = half_min, 
+        family_y = "gaussian", m = 1e4, 
+        debug_dir = NULL)
+    
+    tb_fit <- list(fit_CompDA, fit_CompDA_confounded) %>% 
+      purrr::map2_dfr(
+        c("With adjustment",
+          "Naive"), 
+        function(i_fit, i_method) {
+          as.data.frame(i_fit) %>% 
+            tibble::rownames_to_column("feature") %>% 
+            dplyr::mutate(method = i_method) %>% 
+            return()
+        })
+    
+    save(tb_fit, file = paste0(dir_output, "/fit/tb_fit_", ii_job, ".RData"))
+  }
+  
+  return(NULL)
+}
+```
+
+```{r submit jobs}
+batchtools::clearRegistry()
+n_job_each <- 5
+tb_ids <- batchtools::batchMap(one_job,
+                               i_job = seq(1, nrow(tb_job) / n_job_each))
+batchtools::batchExport(list(dir_output = dir_output,
+                             n_job_each = n_job_each))
+
+# Grid parameters
+ncpus <- 1
+partition <- "janson,janson_cascade,shared"
+walltime <- 3600 * 2
+
+# test run
+batchtools::submitJobs(ids = seq(1, 10),
+                       resources =  list(ncpus = ncpus,
+                                         partition = partition,
+                                         walltime = walltime))
+# submit rest of jobs
+batchtools::submitJobs(ids = batchtools::findNotSubmitted()$job.id,
+                       resources =  list(ncpus = ncpus,
+                                         partition = partition,
+                                         walltime = walltime))
+```
+
+```{r summarize results}
+batchtools::loadRegistry(
+  file.dir = "/n/janson_lab/lab/sma/CRT_microbiome/r_batchtools_reg/real_X/confounded/02_28_2023",
+  writeable = FALSE)
+load(paste0(dir_output, "/tb_job.RData"))
+
+tb_results <- batchtools::findDone()$job.id %>%
+  purrr::map(~ seq((.x - 1) * n_job_each + 1, .x * n_job_each)) %>% 
+  unlist() %>% 
+  purrr::map_dfr(function(i_job) {
+    load(paste0(dir_output, "/fit/y_sim_", i_job, ".RData"))
+    load(paste0(dir_output, "/fit/tb_fit_", i_job, ".RData"))
+    
+    tb_fit %>% 
+      dplyr::group_split(method) %>% 
+      purrr::map_dfr(
+        function(i_tb) {
+          q <- p.adjust(i_tb$p, method = "BH")
+          pos <- q < 0.05
+          tibble::tibble(
+            power = mean(pos[y_sim$ind_TP]),
+            fdr = {
+              if(!any(pos))
+                0
+              else
+                sum((!y_sim$ind_TP) & pos) / sum(pos)
+            },
+            method = i_tb$method[1])
+        }) %>% 
+      dplyr::mutate(i_job = i_job)
+  })
+
+# tb_results <- batchtools::findDone()$job.id %>%
+#   purrr::map(~ seq((.x - 1) * n_job_each + 1, .x * n_job_each)) %>% 
+#   unlist() %>% 
+#   purrr::map_dfr(function(i_job) {
+#     load(paste0(dir_output, "/fit/y_sim_", i_job, ".RData"))
+#     load(paste0(dir_output, "/fit/tb_fit_", i_job, ".RData"))
+#     
+#     tb_fit %>% 
+#       dplyr::group_split(method) %>% 
+#       purrr::map_dfr(
+#         function(i_tb) {
+#           q <- p.adjust(i_tb$p, method = "BH")
+#           pos <- q < 0.05
+#           tibble::tibble(
+#             p_sig = sum(i_tb$p < 0.05),
+#             q_sig = sum(q <  0.05),
+#             method = i_tb$method[1])
+#         }) %>% 
+#       dplyr::mutate(i_job = i_job)
+#   })
+
+tb_results <- tb_results %>% 
+  dplyr::left_join(tb_job, by = "i_job")
+save(tb_results, file = paste0(dir_output, "/tb_results.RData"))
+load(paste0(dir_output, "/tb_results.RData"))
+
+tb_results_summary <- 
+  tb_results %>%
+  dplyr::group_by(method, n_samples, n_features, signal_density, effect_size, 
+                  effect_confounded, r_x) %>% 
+  dplyr::summarise(power_mean_y = mean(power),
+                   fdr_mean_y = mean(fdr)) %>%
+  dplyr::group_by(method, n_samples, n_features, signal_density, effect_confounded, effect_size) %>%
+  dplyr::summarise(power_mean = mean(power_mean_y),
+                   power_sd = sd(power_mean_y) / sqrt(dplyr::n()),
+                   fdr_mean = mean(fdr_mean_y),
+                   fdr_sd = sd(fdr_mean_y) / sqrt(dplyr::n()))
+
+
+# tb_results_summary <- 
+#   tb_results_summary %>% 
+#   dplyr::mutate(method = method %>% 
+#                   dplyr::recode("marginal" = "DA",
+#                                 "db_lasso" = "lasso (with inference)",
+#                                 "lasso" = "lasso (no inference)")) %>% 
+#   dplyr::mutate(method = factor(method, levels = c("DA", "lasso (no inference)", "lasso (with inference)",
+#                                                    "CompDA")))
+
+colors <- c("Naive" = "black", "With adjustment" = "red")
+p_effect_power <- tb_results_summary %>% 
+  ggplot(aes(x = effect_confounded, y = power_mean, color = method)) +
+  geom_point(position = position_dodge(width = 0.05)) +
+  geom_errorbar(aes(ymax = power_mean + power_sd,
+                    ymin = power_mean - power_sd), 
+                width = 0.05, 
+                position = position_dodge(width = 0.05)) +
+  geom_line(position = position_dodge(width = 0.05)) +
+  scale_color_manual(values = colors) +
+  theme_bw() +
+  theme(legend.position = c(1, 0),
+        legend.background = element_blank(),
+        legend.title = element_blank(),
+        legend.justification = c(1, 0)) +
+  # ggtitle("") +
+  xlab("Confounder effect") +
+  ylab("Power")
+
+p_effect_fdr <- tb_results_summary %>% 
+  ggplot(aes(x = effect_confounded, y = fdr_mean, color = method)) +
+  geom_point(position = position_dodge(width = 0.05)) +
+  geom_errorbar(aes(ymax = fdr_mean + fdr_sd,
+                    ymin = fdr_mean - fdr_sd),
+                width = 0.05,
+                position = position_dodge(width = 0.05)) +
+  geom_line(position = position_dodge(width = 0.05)) +
+  scale_color_manual(values = colors) +
+  geom_hline(yintercept = 0.05, linetype = "dashed") +
+  theme_bw() +
+  theme(legend.position = "none") +
+  # ggtitle("") +
+  xlab("Confounder effect") +
+  ylab("FDR")
+
+p_effect <- cowplot::plot_grid(p_effect_fdr, p_effect_power,
+                               nrow = 1, 
+                               labels = c("A", "B"))
+
+ggsave(p_effect_power,
+       filename = "/n/janson_lab/lab/sma/CRT_microbiome/meeting_notes/07_27_22_meeting/power_effect.jpeg",
+       width = 6, height = 4)
+ggsave(p_effect_fdr,
+       filename = "/n/janson_lab/lab/sma/CRT_microbiome/meeting_notes/07_27_22_meeting/fdr_effect.jpeg",
+       width = 6, height = 4)
+
+ggsave(p_effect,
+       filename = "/n/janson_lab/lab/sma/CRT_microbiome/results/effect.jpeg",
+       width = 8, height = 4)
+
+p_dimension_power <- tb_results_summary %>% 
+  dplyr::filter(n_samples == 400,
+                effect_size == 0.4,
+                signal_density == 0.1) %>% 
+  ggplot(aes(x = n_features, y = power_mean, color = method)) +
+  geom_point() +
+  geom_errorbar(aes(ymax = power_mean + power_sd,
+                    ymin = power_mean - power_sd)) +
+  geom_line() +
+  theme_bw() +
+  theme(legend.position = "none") +
+  ggtitle("")
+
+p_dimension_fdr <- tb_results_summary %>% 
+  dplyr::filter(n_samples == 400,
+                effect_size == 0.4,
+                signal_density == 0.1) %>% 
+  ggplot(aes(x = n_features, y = fdr_mean, color = method)) +
+  geom_point() +
+  geom_errorbar(aes(ymax = fdr_mean + fdr_sd,
+                    ymin = fdr_mean - fdr_sd)) +
+  geom_line() +
+  geom_hline(yintercept = 0.05, linetype = "dashed") +
+  theme_bw() +
+  theme(legend.position = "none") +
+  ggtitle("")
+p_dimension <- cowplot::plot_grid(p_dimension_fdr, p_dimension_power, nrow = 1)
+
+# # sanity check p-values
+tb_pval_check <- tb_results$i_job %>%
+  purrr::map_dfr(function(i_job) {
+    load(paste0(dir_output, "/fit/CompDA_marginal_", i_job, ".RData"))
+    load(paste0(dir_output, "/fit/CompDA_", i_job, ".RData"))
+    load(paste0(dir_output, "/fit/y_sim_", i_job, ".RData"))
+    
+    data.frame(pval = fit_CompDA_marginal[, 2],
+               pval_original = fit_CompDA[, 2]) %>%
+      dplyr::mutate(feature = seq(1, dplyr::n()),
+                    TP = y_sim$ind_TP) %>%
+      dplyr::mutate(i_job = i_job)
+  })
+tb_pval_check %>% 
+  dplyr::filter(pval_original > 0.05,
+                !TP) %>% 
+  dplyr::arrange(pval) %>% 
+  dplyr::slice(1)
+
+p_pval <- tb_pval_check %>%
+  # dplyr::filter(pval != 1) %>%
+  ggplot(aes(x = pval)) +
+  geom_histogram(bins = 100) +
+  facet_wrap(~TP, nrow = 1, scales = "free")
+ggsave(p_pval, filename = "/n/janson_lab/lab/sma/CRT_microbiome/meeting_notes/07_27_22_meeting/pvals_marginal.jpeg",
+       width = 6, height = 3)
+
+tb_pval_check <- tb_job %>%
+  dplyr::filter(effect_size == 0.4) %>%
+  {.$i_job} %>%
+  purrr::map_dfr(function(i_job) {
+    load(paste0(dir_output, "/CompDA_", i_job, ".RData"))
+    load(paste0(dir_output, "/y_sim_", i_job, ".RData"))
+    
+    data.frame(pval = fit_CompDA,
+               ind_TP = y_sim$ind_TP) %>%
+      dplyr::mutate(feature = seq(1, dplyr::n())) %>%
+      dplyr::mutate(i_job = i_job)
+  })
+
+p_pval <- tb_pval_check %>%
+  # dplyr::filter(pval != 1) %>%
+  ggplot(aes(x = pval)) +
+  geom_histogram(bins = 100) +
+  facet_grid(.~ind_TP)
+
+tb_pval_check %>%
+  dplyr::filter(pval < 0.01,
+                !ind_TP) %>%
+  ggplot(aes(x = pval)) +
+  geom_histogram(bins = 500) +
+  facet_grid(.~ind_TP)
+# 
+# tb_sd_check <- tb_job %>% 
+#   dplyr::filter(effect_size == 0, r_y == 1) %>% 
+#   {.$i_job} %>% 
+#   purrr::map_dfr(function(i_job) {
+#     load(paste0(dir_output, "/debug/CompDA_", i_job, ".RData"))
+#     l_fits %>% 
+#       purrr::map_dfr(
+#         function(i_fit) 
+#           data.frame(sd1 = i_fit$sds[1], sd2 = i_fit$sds[2])
+#       ) %>%     
+#       dplyr::mutate(i_job = i_job)
+#   })
+# 
+# p_sd <- tb_sd_check %>% 
+#   ggplot(aes(x = sd1, y = sd2)) +
+#   geom_point() +
+#   geom_abline(intercept = 0, slope = 1)
+# 
+# cowplot::plot_grid(p_pval, p_sd) %>% 
+#   ggsave(filename = "/n/janson_lab/lab/sma/CRT_microbiome/meeting_notes/06_22_22_meeting/logistic_sanCheck.jpeg",
+#          width = 9, height = 4)
+
+p_sigDensity_power <- tb_results_summary %>% 
+  dplyr::filter(n_samples == 400,
+                n_features == 200,
+                effect_size == 0.4) %>% 
+  ggplot(aes(x = signal_density, y = power_mean, color = method)) +
+  geom_point() +
+  geom_errorbar(aes(ymax = power_mean + power_sd,
+                    ymin = power_mean - power_sd)) +
+  geom_line() +
+  theme_bw() +
+  theme(legend.position = "none") +
+  ggtitle("")
+
+p_sigDensity_fdr <- tb_results_summary %>% 
+  dplyr::filter(n_samples == 400,
+                n_features == 200,
+                effect_size == 0.4) %>% 
+  ggplot(aes(x = signal_density, y = fdr_mean, color = method)) +
+  geom_point() +
+  geom_errorbar(aes(ymax = fdr_mean + fdr_sd,
+                    ymin = fdr_mean - fdr_sd)) +
+  geom_line() +
+  geom_hline(yintercept = 0.05, linetype = "dashed") +
+  theme_bw() +
+  theme(legend.position = "none") +
+  ggtitle("")
+
+p_sigDensity <- cowplot::plot_grid(p_sigDensity_fdr,
+                                   p_sigDensity_power, nrow = 1)
+
+p_sampleSize_power <- tb_results_summary %>% 
+  dplyr::filter(n_features == 200,
+                effect_size == 0.4,
+                signal_density == 0.1) %>% 
+  ggplot(aes(x = n_samples, y = power_mean, color = method)) +
+  geom_point() +
+  geom_errorbar(aes(ymax = power_mean + power_sd,
+                    ymin = power_mean - power_sd)) +
+  geom_line() +
+  theme_bw() +
+  theme(legend.position = "none") +
+  ggtitle("")
+
+p_sampleSize_fdr <- tb_results_summary %>% 
+  dplyr::filter(n_features == 200,
+                effect_size == 0.4,
+                signal_density == 0.1) %>% 
+  ggplot(aes(x = n_samples, y = fdr_mean, color = method)) +
+  geom_point() +
+  geom_errorbar(aes(ymax = fdr_mean + fdr_sd,
+                    ymin = fdr_mean - fdr_sd)) +
+  geom_line() +
+  geom_hline(yintercept = 0.05, linetype = "dashed") +
+  theme_bw() +
+  theme(legend.position = "none") +
+  ggtitle("")
+
+p_sampleSize <- cowplot::plot_grid(p_sampleSize_fdr,
+                                   p_sampleSize_power, nrow = 1)
+
+p <- cowplot::plot_grid(
+  p_effect,
+  p_sampleSize,
+  p_dimension,
+  p_sigDensity,
+  ncol = 1,
+  labels = c("A)", "B)", "C)", "D)")
+)
+ggsave(p, filename = "/n/janson_lab/lab/sma/CRT_microbiome/meeting_notes/07_27_22_meeting/overall.jpeg",
+       width = 8, height = 14)
+```

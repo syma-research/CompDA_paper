@@ -60,13 +60,14 @@ simulate_y_sqr <- function(x, effect_size, n_signal, epsilon,
 
   link_ey <- (x_TP_sqr %*% effects)[, 1]
   if(family == "gaussian") {
-    link_ey <- link_ey * sqrt(snr) / sd(linke_ey)
     y <- link_ey + rnorm(n = nrow(x), mean = 0, sd = 1)
+    snr <- var(link_ey)
   }
   else if (family == "binomial") {
-    y <- rbinom(n = nrow(x), size = 1, prob = exp(link_ey) / (1 + exp(link_ey)))
+    ey <- exp(link_ey) / (1 + exp(link_ey))
+    y <- rbinom(n = nrow(x), size = 1, prob = ey)
+    snr <- var(ey) / (var(y) - var(ey))
   }
-  snr <- var(link_ey) / 1
 
   return(list(ind_TP = ind_TP,
               effects = effects,
@@ -104,13 +105,14 @@ simulate_y_confounded <-
     link_ey_z <- link_ey_z / sd(link_ey_z) * sd(link_ey_x) * effect_confounded
     link_ey <- link_ey_x + link_ey_z
     if(family == "gaussian") {
-      link_ey <- link_ey * sqrt(snr) / sd(linke_ey)
       y <- link_ey + rnorm(n = nrow(x), mean = 0, sd = 1)
+      snr <- var(link_ey)
     }
     else if (family == "binomial") {
-      y <- rbinom(n = nrow(x), size = 1, prob = exp(link_ey) / (1 + exp(link_ey)))
+      ey <- exp(link_ey) / (1 + exp(link_ey))
+      y <- rbinom(n = nrow(x), size = 1, prob = ey)
+      snr <- var(ey) / (var(y) - var(ey))
     }
-    snr <- var(link_ey) / 1
 
     return(list(ind_TP = ind_TP,
                 effects = effects,
