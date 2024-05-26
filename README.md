@@ -17,3 +17,7 @@ Testing: Defining and Finding a New Type of Health-Microbiome Associations" (Ma,
 
     * If you have access to a high-performance computing environment, you should be able to similarly interact with
       `r_batch_tools` to perform the same analysis.
+
+* `R/` has utility scripts used in the simulations. It also includes the relevant matlab code, directly copied from
+  [Lu, Shi, and Li, Biometrics, 2019](https://pubmed.ncbi.nlm.nih.gov/30039859/), to evaluate the performance of the debiased
+  generalized linear lasso method described in that paper.
