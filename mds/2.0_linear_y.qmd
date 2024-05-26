@@ -1,8 +1,7 @@
 ---
-title: "Binary Y performance comparison"
+title: "Linear Y performance comparison"
 output: html_document
 ---
-
 
 ```{r setup, include=FALSE}
 rm(list = ls())
@@ -12,16 +11,16 @@ library(ggplot2)
 
 ```{r batch job}
 # batchtools::makeRegistry(
-#   file.dir = "/n/janson_lab/lab/sma/CompDA_paper/r_batchtools_reg/binary_Y",
+#   file.dir = "/n/janson_lab/lab/sma/CompDA_paper/r_batchtools_reg/linear_Y",
 #   package = c("magrittr"))
 batchtools::loadRegistry(
-  file.dir = "/n/janson_lab/lab/sma/CompDA_paper/r_batchtools_reg/binary_Y",
+  file.dir = "/n/janson_lab/lab/sma/CompDA_paper/r_batchtools_reg/linear_Y",
   writeable = TRUE)
 rm(list = ls())
 ```
 
 ```{r define job}
-dir_output <- "/n/janson_lab/lab/sma/CompDA_paper/results/simulation/binary_Y"
+dir_output <- "/n/janson_lab/lab/sma/CompDA_paper/results/simulation/linear_Y"
 dir.create(dir_output, recursive = TRUE, showWarnings = FALSE)
 dir.create(paste0(dir_output, "/fit"), recursive = TRUE, showWarnings = FALSE)
 dir.create(paste0(dir_output, "/debug"), recursive = TRUE, showWarnings = FALSE)
@@ -32,7 +31,7 @@ tb_effetSize <-
     n_samples = 400,
     n_features = 200,
     signal_density = 0.1,
-    effect_size = c(0, 0.05, 0.1, 0.2, 0.4, 0.8)
+    effect_size = c(0, 0.05, 0.1, 0.15, 0.2)
   )
 
 tb_sampleSize <- 
@@ -40,7 +39,7 @@ tb_sampleSize <-
     n_samples = c(50, 100, 200, 400),
     n_features = 200,
     signal_density = 0.1,
-    effect_size = 0.4
+    effect_size = 0.15
   )
 
 tb_dimension <- 
@@ -48,7 +47,7 @@ tb_dimension <-
     n_samples = 400,
     n_features = c(50, 100, 200, 300),
     signal_density = 0.1,
-    effect_size = 0.4
+    effect_size = 0.15
   )
 
 tb_sigDensity <- 
@@ -56,7 +55,7 @@ tb_sigDensity <-
     n_samples = 400,
     n_features = 200,
     signal_density = c(0.025, 0.05, 0.1, 0.2),
-    effect_size = 0.4
+    effect_size = 0.15
   )
 
 tb_job <- rbind(
@@ -68,7 +67,7 @@ tb_job <- rbind(
   tidyr::crossing(r_y = seq(1, 10),
                   r_x = seq(1, 20)) %>% 
   dplyr::mutate(i_job = seq(1, dplyr::n()))
-# create random seed
+
 set.seed(0)
 tb_job <- tb_job %>% 
   dplyr::mutate(
@@ -95,32 +94,25 @@ one_job <- function(i_job) {
                                i_tb_job$n_samples * i_tb_job$r_x)] %>% 
       apply(2, tss_withzero) %>% 
       t() 
-    # output for fitting with matlab
-    readr::write_csv(as.data.frame(i_x_obs),
-                     file = paste0(dir_output, "/data/x_", ii_job, ".csv"),
-                     col_names = FALSE)
-      
+    
     half_min <- min(setdiff(i_x_obs, 0)) / 2
     y_sim <- simulate_y(x = i_x_obs, 
                         effect_size = i_tb_job$effect_size, 
                         n_signal = i_tb_job$n_features * i_tb_job$signal_density, 
                         epsilon = half_min,
-                        family = "binomial",
                         seed = ii_job)
     save(y_sim, file = paste0(dir_output, "/data/y_sim_", ii_job, ".RData"))
-    readr::write_csv(data.frame(y = y_sim$y),
-                     file = paste0(dir_output, "/data/y_", ii_job, ".csv"), 
-                     col_names = FALSE)
     
     # CompDA
     time_CompDA <- system.time(
       fit_CompDA <-
         CompDA::CompDA(
           x = i_x_obs, y = y_sim$y, epsilon = half_min,
-          family_y = "binomial", method_y = "glmnet", m = 1e4,
+          family_y = "gaussian", method_y = "glmnet",  m = 1e4,
           debug_dir = NULL)
     )
-
+    
+    
     fit_DA <-
       test_DA(
         x = i_x_obs, y = y_sim$y,
@@ -131,10 +123,10 @@ one_job <- function(i_job) {
       test_linda(
         x = i_x_obs, y = y_sim$y)
     
-    fit_lasso <- 
+    fit_lasso <-
       test_lasso(
         x = i_x_obs, y = y_sim$y,
-        family = "binomial",
+        family = "gaussian",
         epsilon = half_min)
     
     save(fit_CompDA, file = paste0(dir_output, "/fit/CompDA_", ii_job, ".RData"))
@@ -143,7 +135,6 @@ one_job <- function(i_job) {
     save(fit_linda, file = paste0(dir_output, "/fit/linda_", ii_job, ".RData"))
     save(fit_lasso, file = paste0(dir_output, "/fit/lasso_", ii_job, ".RData"))
   }
-  
   return(NULL)
 }
 ```
@@ -159,7 +150,7 @@ batchtools::batchExport(list(dir_output = dir_output,
 # Grid parameters
 ncpus <- 1
 partition <- "janson,janson_cascade,shared"
-walltime <- 3600 * 3
+walltime <- 3600
 
 # test run
 batchtools::submitJobs(ids = seq(1, 10),
@@ -167,7 +158,7 @@ batchtools::submitJobs(ids = seq(1, 10),
                                          partition = partition,
                                          walltime = walltime))
 # submit rest of jobs
-batchtools::submitJobs(ids = batchtools::findNotSubmitted()$job.id,
+batchtools::submitJobs(ids = batchtools::findNotSubmitted(),
                        resources =  list(ncpus = ncpus,
                                          partition = partition,
                                          walltime = walltime))

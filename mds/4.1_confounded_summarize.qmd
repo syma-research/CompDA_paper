@@ -1,0 +1,166 @@
+---
+title: "When there are confounding covariates"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+rm(list = ls())
+library(magrittr)
+library(ggplot2)
+```
+
+```{r summarize results}
+dir_output <- "/n/janson_lab/lab/sma/CompDA_paper/results/simulation/confounded"
+load(paste0(dir_output, "/tb_job.RData"))
+
+tb_results <- tb_job$i_job %>%
+  purrr::map_dfr(function(i_job) {
+    load(paste0(dir_output, "/data/y_sim_", i_job, ".RData"))
+    load(paste0(dir_output, "/fit/tb_fit_", i_job, ".RData"))
+    
+    tb_fit %>% 
+      dplyr::group_split(method) %>% 
+      purrr::map_dfr(
+        function(i_tb) {
+          q <- p.adjust(i_tb$p, method = "BH")
+          pos <- q < 0.05
+          tibble::tibble(
+            power = mean(pos[y_sim$ind_TP]),
+            fdr = {
+              if(!any(pos))
+                0
+              else
+                sum((!y_sim$ind_TP) & pos) / sum(pos)
+            },
+            method = i_tb$method[1])
+        }) %>% 
+      dplyr::mutate(i_job = i_job)
+  })
+tb_results <- tb_results %>% 
+  dplyr::left_join(tb_job, by = "i_job")
+save(tb_results, file = paste0(dir_output, "/tb_results.RData"))
+
+load(paste0(dir_output, "/tb_results.RData"))
+tb_results_summary <- 
+  tb_results %>%
+  dplyr::group_by(method, n_samples, n_features, signal_density, effect_size, 
+                  effect_confounded, r_x) %>% 
+  dplyr::summarise(power_mean_y = mean(power),
+                   fdr_mean_y = mean(fdr)) %>%
+  dplyr::group_by(method, n_samples, n_features, signal_density, effect_confounded, effect_size) %>%
+  dplyr::summarise(power_mean = mean(power_mean_y),
+                   power_sd = sd(power_mean_y) / sqrt(dplyr::n()),
+                   fdr_mean = mean(fdr_mean_y),
+                   fdr_sd = sd(fdr_mean_y) / sqrt(dplyr::n())) %>% 
+  dplyr::mutate(method_plot = method %>% 
+                  dplyr::recode(
+                    "Naive" = "Unadjusted",
+                    "With adjustment" = "Adjusted"
+                  ) %>% 
+                  factor(levels = c("Unadjusted",
+                                    "Adjusted")))
+
+colors <- c("Unadjusted" = "black", "Adjusted" = "red")
+p_confounded_power <- tb_results_summary %>% 
+  ggplot(aes(x = effect_confounded, y = power_mean, color = method_plot)) +
+  geom_point() +
+  geom_errorbar(aes(ymax = power_mean + power_sd,
+                    ymin = power_mean - power_sd), 
+                width = 0.2) +
+  geom_line() +
+  scale_color_manual(values = colors) +
+  theme_bw() +
+  theme(legend.position = "none") +
+  ggtitle("") +
+  xlab("Reletive confounder effect") +
+  ylab("Power")
+
+p_confounded_fdr <- tb_results_summary %>% 
+  ggplot(aes(x = effect_confounded, y = fdr_mean, color = method_plot)) +
+  geom_point() +
+  geom_errorbar(aes(ymax = fdr_mean + fdr_sd,
+                    ymin = fdr_mean - fdr_sd),
+                width = 0.2) +
+  geom_line() +
+  scale_color_manual(values = colors, name = "CompDA confounder adjustment") +
+  geom_hline(yintercept = 0.05, linetype = "dashed") +
+  theme_bw() +
+  theme(legend.position = c(0, 1),
+        legend.background = element_blank(),
+
+        legend.justification = c(0, 1)) +
+  ggtitle("Impact of confounder") +
+  xlab("Reletive confounder effect") +
+  ylab("FDR")
+
+# add ML evaluation
+load("/n/janson_lab/lab/sma/CompDA_paper/results/simulation/misspecified/tb_results.RData")
+tb_results_summary <- 
+  tb_results %>%
+  dplyr::group_by(method, n_samples, n_features, signal_density, effect_size, r_x) %>% 
+  dplyr::summarise(power_mean_y = mean(power),
+                   fdr_mean_y = mean(fdr)) %>% 
+  dplyr::group_by(method, n_samples, n_features, signal_density, effect_size) %>% 
+  dplyr::summarise(power_mean = mean(power_mean_y),
+                   power_sd = sd(power_mean_y) / sqrt(dplyr::n()),
+                   fdr_mean = mean(fdr_mean_y),
+                   fdr_sd = sd(fdr_mean_y) / sqrt(dplyr::n()))
+
+tb_results_summary <-
+  tb_results_summary %>%
+  dplyr::mutate(`CompDA ML model for health outcome` = method %>%
+                  dplyr::recode("glmnet" = "lasso",
+                                "svm" = "Support vector machine",
+                                "rf" = "Random forest",
+                                "gbt" = "Gradient boosted tree") %>% 
+                  factor(levels = c("lasso", "Support vector machine",
+                                    "Random forest", "Gradient boosted tree")))
+
+colors <- palette.colors(n = 5, "R4")[-1]
+names(colors) <- levels(tb_results_summary$`CompDA ML model for health outcome`)
+p_misspecified_power <- tb_results_summary %>% 
+  dplyr::filter(effect_size < 0.8) %>%
+  ggplot(aes(x = effect_size, y = power_mean, color = `CompDA ML model for health outcome`)) +
+  geom_point() +
+  geom_errorbar(aes(ymax = power_mean + power_sd,
+                    ymin = power_mean - power_sd),
+                width = 0.025) +
+  geom_line() +
+  scale_color_manual(values = colors) +
+  theme_bw() +
+  theme(legend.position = "none") +
+  ggtitle("") +
+  xlab("Microbial effect size on health") +
+  ylab("Power")
+
+p_misspecified_fdr <- tb_results_summary %>% 
+  dplyr::filter(effect_size < 0.8) %>%
+  ggplot(aes(x = effect_size, y = fdr_mean, color = `CompDA ML model for health outcome`)) +
+  geom_point() +
+  geom_errorbar(aes(ymax = fdr_mean + fdr_sd,
+                    ymin = fdr_mean - fdr_sd),
+                width = 0.025) +
+  geom_line() +
+  geom_hline(yintercept = 0.05, linetype = "dashed") +
+  theme_bw() +
+  scale_color_manual(values = colors) +
+  ylim(c(0, 0.1)) +
+  theme(legend.position = c(0, 1),
+        legend.background = element_blank(),
+        legend.justification = c(0, 1)) +
+  ggtitle("Impact of ML model for health outcome") +
+  xlab("Microbial effect size on health") +
+  ylab("FDR")
+
+fig3 <- cowplot::plot_grid(p_misspecified_fdr, 
+                           p_misspecified_power,
+                           p_confounded_fdr,
+                           p_confounded_power,
+                           nrow = 2, 
+                           labels = c("A", "", 
+                                      "B", ""))
+
+ggsave(fig3,
+       filename = "/n/janson_lab/lab/sma/CompDA_paper/results/figures/figure3.pdf",
+       width = 7.5, height = 7.5)
+```

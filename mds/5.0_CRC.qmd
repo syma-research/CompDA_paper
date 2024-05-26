@@ -107,6 +107,7 @@ ggsave(p_hist,
        width = 5, height = 4)
 
 # effect sizes
+color_text <- c()
 tb_effect <- tb_result %>% 
   dplyr::left_join(tb_maaslin2, by = "feature") %>% 
   dplyr::filter(q < 0.05) %>% 
@@ -129,7 +130,7 @@ p_effect <- tb_effect %>%
                 label = paste0("q = ", round(q, digits = 4)),
                 hjust = c(-0.1, 1.1)[(beta > 0) + 1])) +
   theme_bw() +
-  theme(axis.text.y = element_text(face = "italic", colour = color_text),
+  theme(axis.text.y = element_text(face = "italic"),
         axis.title.y = element_blank()) +
   xlab("Effect size\n(conditional correlation)") +
   scale_y_discrete(position = "right") +
