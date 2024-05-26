@@ -1,6 +1,8 @@
 This is the github repository for reproducing the analyses performed in the paper "Compositional Differential Abundance 
 Testing: Defining and Finding a New Type of Health-Microbiome Associations" (Ma, Huttenhower, and Janson, 2024).
 
+* The analyses involved here requires the `CompDA` R package, which can be found in [this companion software repo](https://github.com/syma-research/CompDA).
+
 * Each analysis script is organized by sequence under `mds/`.
 
 * Scripts `mds/1.0` - `mds/4.0` conduct the simulation analyses. Scripts `mds/1.2`, `mds/2.1`, `mds/3.1`, and `mds/4.1`
