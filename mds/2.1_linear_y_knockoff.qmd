@@ -14,7 +14,7 @@ library(magrittr)
 library(ggplot2)
 ```
 
-```{r nodewise batch job}
+```{r batch job}
 # batchtools::makeRegistry(
 #   file.dir = "/n/janson_lab/lab/sma/CompDA_paper/r_batchtools_reg/knockoff",
 #   package = c("magrittr"))
@@ -24,7 +24,7 @@ batchtools::loadRegistry(
 rm(list = ls())
 ```
 
-```{r nodewise}
+```{r define job}
 dir_output <- "/n/janson_lab/lab/sma/CompDA_paper/results/simulation/linear_Y"
 load(paste0(dir_output, "/tb_job.RData"))
 tb_job_knockoff <- 
@@ -70,7 +70,7 @@ one_job <- function(i_job) {
 }
 ```
 
-```{r nodewise submit jobs}
+```{r submit jobs}
 batchtools::clearRegistry()
 n_job_each <- 1
 tb_ids <- batchtools::batchMap(one_job,
