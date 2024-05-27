@@ -5,7 +5,7 @@ Testing: Defining and Finding a New Type of Health-Microbiome Associations" (Ma,
 
 * Each analysis script is organized by sequence under `mds/`.
 
-* Scripts `mds/1.0` - `mds/4.0` conduct the simulation analyses. Scripts `mds/1.2`, `mds/2.1`, `mds/3.1`, and `mds/4.1`
+* Scripts `mds/1.0` - `mds/4.0` conduct the simulation analyses. Scripts `mds/1.2`, `mds/2.2`, `mds/3.1`, and `mds/4.1`
   summarize findings from the analyses and generate figures. Script `mds/5.0` conducts the real-world (CRC) analysis.
 
 * For the simulation evaluation scripts (mds/1.0-4.0), these were designed to run large-scale benchmarking using the
