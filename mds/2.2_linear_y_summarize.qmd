@@ -45,8 +45,39 @@ tb_results <- tb_results %>%
   dplyr::left_join(tb_job, by = "i_job")
 save(tb_results, file = paste0(dir_output, "/tb_results.RData"))
 
+load(paste0(dir_output, "/tb_job_knockoff.RData"))
+tb_results_knockoff <- 
+  tb_job_knockoff$i_job %>% 
+  purrr::map_dfr(function(i_job) {
+    # in rare occasions (3/800 here), knockoff run can fail, which we omit
+    if(!file.exists(paste0(dir_output, "/fit/knockoff_", i_job, ".RData")))
+      return(tibble::tibble(
+        power = c(),
+        fdr = c(),
+        method = c(),
+        i_job = c()
+      ))
+    load(paste0(dir_output, "/data/y_sim_", i_job, ".RData"))
+    load(paste0(dir_output, "/fit/knockoff_", i_job, ".RData"))
+    pos <- fit_knockoff[, 1] == 0
+    tibble::tibble(
+      power = mean(pos[y_sim$ind_TP]),
+      fdr = {
+        if(!any(pos))
+          0
+        else
+          sum((!y_sim$ind_TP) & pos) / sum(pos)
+      },
+      method = "Fixed-X knockoff",
+      i_job = i_job)
+  })
+tb_results_knockoff <- tb_results_knockoff %>% 
+  dplyr::left_join(tb_job, by = "i_job")
+save(tb_results_knockoff, file = paste0(dir_output, "/tb_results_knockoff.RData"))
+
 tb_results_summary <- 
-  tb_results %>% 
+  rbind(tb_results,
+        tb_results_knockoff) %>% 
   dplyr::group_by(method, n_samples, n_features, signal_density, effect_size, r_x) %>% 
   dplyr::summarise(power_mean_y = mean(power),
                    fdr_mean_y = mean(fdr)) %>% 
@@ -63,10 +94,12 @@ tb_results_summary <-
                     "lasso" = "lasso (no inference)")) %>% 
   dplyr::mutate(method = factor(method, levels = c("DA", "LinDA", 
                                                    "lasso (no inference)", 
+                                                   "Fixed-X knockoff",
                                                    "CompDA")))
 
-colors <- c("black", rev(palette.colors(n = 5, "R4")[-c(1, 3)]))
-names(colors) <- c(levels(tb_results_summary$method))
+colors <- c("black", rev(palette.colors(n = 6, "R4")[-c(1, 3)]))
+names(colors) <- c("DA", "Fixed-X knockoff", "LinDA", 
+                   "lasso (no inference)", "CompDA")
 
 p_sampleSize_power <- tb_results_summary %>% 
   dplyr::filter(n_features == 200,
@@ -105,6 +138,7 @@ p_sampleSize_fdr <- tb_results_summary %>%
   ylab("FDR")
 
 p_effect_power <- tb_results_summary %>% 
+  dplyr::filter(method != "Fixed-X knockoff") %>% 
   dplyr::filter(n_samples == 400,
                 n_features == 200,
                 signal_density == 0.1) %>% 
@@ -121,6 +155,7 @@ p_effect_power <- tb_results_summary %>%
   ylab("Power")
 
 p_effect_fdr <- tb_results_summary %>% 
+  dplyr::filter(method != "Fixed-X knockoff") %>% 
   dplyr::filter(method != "screening + fixed-X knockoff") %>% 
   dplyr::filter(n_samples == 400,
                 n_features == 200,
@@ -139,6 +174,7 @@ p_effect_fdr <- tb_results_summary %>%
   ylab("FDR")
 
 p_dimension_power <- tb_results_summary %>% 
+  dplyr::filter(method != "Fixed-X knockoff") %>% 
   dplyr::filter(n_samples == 400,
                 signal_density == 0.1,
                 effect_size == 0.15) %>% 
@@ -155,6 +191,7 @@ p_dimension_power <- tb_results_summary %>%
   ylab("Power")
 
 p_dimension_fdr <- tb_results_summary %>% 
+  dplyr::filter(method != "Fixed-X knockoff") %>% 
   dplyr::filter(method != "screening + fixed-X knockoff") %>% 
   dplyr::filter(n_samples == 400,
                 signal_density == 0.1,
@@ -173,6 +210,7 @@ p_dimension_fdr <- tb_results_summary %>%
   ylab("FDR")
 
 p_sigDensity_power <- tb_results_summary %>% 
+  dplyr::filter(method != "Fixed-X knockoff") %>% 
   dplyr::filter(n_samples == 400,
                 n_features == 200,
                 effect_size == 0.15) %>% 
@@ -189,6 +227,7 @@ p_sigDensity_power <- tb_results_summary %>%
   ylab("Power")
 
 p_sigDensity_fdr <- tb_results_summary %>% 
+  dplyr::filter(method != "Fixed-X knockoff") %>% 
   dplyr::filter(n_samples == 400,
                 n_features == 200,
                 effect_size == 0.15) %>% 
